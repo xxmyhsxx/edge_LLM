@@ -1,81 +1,77 @@
-# src/utils/metrics.py
 import time
 import torch
-import contextlib
 import gc
-import numpy as np
-
+import contextlib
 
 class PerformanceMonitor:
     """
-    全能性能监控器：同时测量 耗时(Latency) 和 显存(VRAM)
+    性能监控器：用于测量代码块的 执行时间(Latency) 和 显存峰值(Peak Memory)。
+    专为 PyTorch/Jetson 优化，包含 CUDA 同步逻辑。
     """
-
     def __init__(self):
         self.start_time = 0
         self.end_time = 0
-        self.latency = 0
-        self.peak_memory_gb = 0
-        self.start_memory_gb = 0
+        self.peak_memory = 0
+        self.start_memory = 0
 
     @contextlib.contextmanager
     def track(self, device="cuda"):
         """
-        用法:
-        with monitor.track():
-            model.generate(...)
+        上下文管理器，用于包裹需要测试的代码块。
         """
-        # 1. 清理现场 (可选，为了测得更准)
+        # 1. 环境清理 (确保测试准确，不受之前残留影响)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize() # 等待 GPU 完成所有旧任务
+        
         gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
 
         # 2. 记录开始状态
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()  # 等待之前的 GPU 任务结束
-            self.start_memory_gb = torch.cuda.memory_allocated() / (1024 ** 3)
-
         self.start_time = time.perf_counter()
+        if torch.cuda.is_available():
+            self.start_memory = torch.cuda.memory_allocated()
 
-        yield  # 执行原本的代码
+        # --- 执行被包裹的代码 ---
+        yield 
+        # ----------------------
 
         # 3. 记录结束状态
         if torch.cuda.is_available():
-            torch.cuda.synchronize()  # 等待当前的 GPU 任务结束
-            self.peak_memory_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)
-
+            torch.cuda.synchronize() # 等待 GPU 完成当前任务 (关键!)
+            self.peak_memory = torch.cuda.max_memory_allocated()
+        
         self.end_time = time.perf_counter()
-        self.latency = self.end_time - self.start_time
 
-    def report(self):
-        """返回字典格式的报告"""
+    @property
+    def latency(self):
+        """返回秒数"""
+        return self.end_time - self.start_time
+
+    @property
+    def peak_memory_gb(self):
+        """返回峰值显存 (GB)"""
+        return self.peak_memory / (1024**3)
+
+    def get_report(self):
         return {
-            "Latency (s)": round(self.latency, 4),
-            "Peak Memory (GB)": round(self.peak_memory_gb, 2),
-            "Memory Growth (GB)": round(self.peak_memory_gb - self.start_memory_gb, 2)
+            "latency_sec": round(self.latency, 4),
+            "peak_memory_gb": round(self.peak_memory_gb, 2)
         }
 
-
-class TokenUtils:
+class TPSCalculator:
     """
-    Token 工具箱：计算吞吐量
+    计算 Tokens Per Second (吞吐量) 的辅助工具
     """
-
     @staticmethod
-    def count_tokens(text, tokenizer=None):
-        """
-        计算 Token 数。
-        如果有 tokenizer 就用 tokenizer 算（准）；
-        如果没有，就按经验值估算（快）。
-        """
+    def calculate(output_text, latency, tokenizer=None):
+        if latency <= 0: return 0.0
+        
+        # 如果有 tokenizer，计算准确的 token 数
         if tokenizer:
-            return len(tokenizer.encode(text))
+            num_tokens = len(tokenizer.encode(output_text))
         else:
-            # 经验公式：平均 1 个 token ≈ 0.75 个英文单词 或 0.6 个汉字
-            # 这里简单粗暴按字符数/3 估算
-            return max(1, int(len(text) / 3))
-
-    @staticmethod
-    def calc_throughput(num_tokens, latency_seconds):
-        if latency_seconds <= 0: return 0.0
-        return num_tokens / latency_seconds
+            # 否则按字符估算 (粗略：1 token ≈ 3 chars)
+            num_tokens = len(output_text) // 3
+            
+        return num_tokens / latency

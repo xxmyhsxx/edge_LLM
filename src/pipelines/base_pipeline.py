@@ -1,14 +1,18 @@
 from abc import ABC, abstractmethod
 
 class BasePipeline(ABC):
-    def __init__(self, model_path, **kwargs):
-        self.model_path = model_path
+    def __init__(self, backend):
+        """
+        Dependency Injection: Pipeline 依赖 Backend
+        """
+        self.backend = backend
 
     @abstractmethod
-    def chat(self, prompt, media_path=None, media_type='text', **kwargs):
-        """
-        所有 Pipeline 必须实现这个接口
-        输入: 提示词, 媒体路径, 媒体类型
-        输出: 文本回复
-        """
+    def preprocess(self, media_list):
+        """处理图片/视频"""
+        pass
+
+    @abstractmethod
+    def run(self, prompt, media_path=None, **kwargs):
+        """端到端运行"""
         pass
