@@ -1,1 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+.venv/
 
+# VS Code (个人配置不建议上传，除非是团队统一配置)
+.vscode/
+
+# 系统文件
+.DS_Store
+
+# 密钥/密码 (非常重要，千万别把密钥传上去)
+*.pem
+*.key
+id_rsa
