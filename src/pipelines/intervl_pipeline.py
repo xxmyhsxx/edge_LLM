@@ -164,9 +164,13 @@ if __name__ =="__main__":
     model = PyTorchBackend("/app/models/InternVL3_5-4B-Instruct")
     internvl = InternVLPipeline(backend=model)
     kwargs = {"frames":8}
-    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=True,**kwargs)
+    # 流式输出
+    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=False,**kwargs)
     print("Bot: ", end="", flush=True)
     for chunk in answer:
         print(chunk, end="", flush=True)
     print("\n\n>>> 结束")
-    
+
+    # 非流式
+    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=True,**kwargs)
+    print(answer)

@@ -33,7 +33,7 @@ class PyTorchBackend(BaseEngine):
             # 注意：InternVL 的 chat 底层调用 generate，通常会透传 generation_config
             generation_config['streamer'] = streamer
 
-            # 3. 准备参数
+            # 准备参数
             chat_kwargs = dict(
                 tokenizer=self.tokenizer,
                 pixel_values=pixel_values,
@@ -43,10 +43,10 @@ class PyTorchBackend(BaseEngine):
                 **kwargs 
             )
 
-            # 4. 在新线程中启动 model.chat (因为它是阻塞的)
+            # 在新线程中启动 model.chat (因为它是阻塞的)
             thread = Thread(target=self.model.chat, kwargs=chat_kwargs)
             thread.start()
-            # 5. 返回 streamer (生成器)
+            # 返回 streamer (生成器)
             return streamer
 
         else:
