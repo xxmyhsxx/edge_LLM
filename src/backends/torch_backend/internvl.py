@@ -3,7 +3,7 @@ from threading import Thread
 from transformers import AutoModel, AutoTokenizer, TextIteratorStreamer 
 from ..base import BaseEngine
 
-class PyTorchBackend(BaseEngine):
+class InternPyTorchBackend(BaseEngine):
     
     def load(self):
         print(f">>> [Backend: PyTorch] Loading {self.model_path}...")
@@ -27,12 +27,9 @@ class PyTorchBackend(BaseEngine):
 
         
         if stream:
-            
             streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-        
             # 注意：InternVL 的 chat 底层调用 generate，通常会透传 generation_config
             generation_config['streamer'] = streamer
-
             # 准备参数
             chat_kwargs = dict(
                 tokenizer=self.tokenizer,

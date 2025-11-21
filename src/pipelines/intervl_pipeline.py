@@ -6,6 +6,21 @@ from src.pipelines.base_pipeline import BasePipeline
 from src.utils.media_loader import MediaLoader
 from src.utils.metrics import PerformanceMonitor, TPSCalculator
 
+try:
+    from src.backends.torch_backend.internvl import InternPyTorchBackend
+except ImportError:
+    PyTorchBackend = None
+
+try:
+    from src.backends.llamacpp_backend.internvl import InternLlamaCppBackend
+except ImportError:
+    LlamaCppBackend = None
+
+try:
+    from src.backends.vllm_backend.internvl import InternVLLMBackend
+except ImportError:
+    VLLMBackend = None
+
 class InternVLPipeline(BasePipeline):
     def __init__(self, backend):
         super().__init__(backend)
@@ -16,6 +31,34 @@ class InternVLPipeline(BasePipeline):
         self.IMAGENET_MEAN = (0.485, 0.456, 0.406)
         self.IMAGENET_STD = (0.229, 0.224, 0.225)
         self.monitor = PerformanceMonitor()
+        self.backend_type = self._determine_backend_type(backend)
+        print(f">>> [Pipeline] Initialized with backend type: {self.backend_type}")
+    
+
+    def _determine_backend_type(self, backend):
+        """
+        辅助函数：确定后端的具体类型
+        """
+        # 1. 优先使用 isinstance 检查 (最准确)
+        if InternPyTorchBackend and isinstance(backend, InternPyTorchBackend):
+            return "pytorch"
+        if InternLlamaCppBackend and isinstance(backend, InternLlamaCppBackend):
+            return "llamacpp"
+        if InternVLLMBackend and isinstance(backend, InternVLLMBackend):
+            return "vllm"
+            
+        # 2. 兜底策略：使用类名字符串检查
+        # (防止某些环境下 import 失败导致 isinstance 失效)
+        class_name = backend.__class__.__name__
+        if "PyTorch" in class_name: return "pytorch"
+        if "LlamaCpp" in class_name: return "llamacpp"
+        if "VLLM" in class_name or "vLLM" in class_name: return "vllm"
+        if "LMDeploy" in class_name: return "lmdeploy"
+        
+        return "unknown"
+    
+
+
 
     def _build_transform(self, input_size):
         return T.Compose([
@@ -102,75 +145,67 @@ class InternVLPipeline(BasePipeline):
         if media_path:
             media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
 
-        # 2. 预处理数据 (Pipeline 的核心职责)
-        pixel_values = None
-        num_patches_list = []
-        
-        if media_list:
-            pixel_values, num_patches_list = self.preprocess(media_list)
+        generate_kwargs = {
+            "prompt": prompt,
+            "stream": stream,
             
-            # 构造 Prompt
-            prefix = "".join([f"视频帧<{i+1}>: <image>\n" for i in range(len(media_list))])
-            prompt = prefix + prompt
-        
+        }
+
+        if self.backend_type == "pytorch":
+            pixel_values = None
+            num_patches_list = []
+            
+            if media_list:
+                pixel_values, num_patches_list = self.preprocess(media_list)
+                # 构造 Prompt 前缀
+                prefix = "".join([f"视频帧<{i+1}>: <image>\n" for i in range(len(media_list))])
+                generate_kwargs["prompt"] = prefix + prompt
+            
+            generate_kwargs["pixel_values"] = pixel_values
+            generate_kwargs["num_patches_list"] = num_patches_list
+        elif self.backend_type == "llamacpp":
+            generate_kwargs["media_list"] = media_list
+        elif self.backend_type == "vllm":
+            pass
+        else:
+            pass
         if stream:
-            # 调用后端获取生成器
-            streamer = self.backend.generate(
-                prompt, 
-                pixel_values, 
-                num_patches_list=num_patches_list,
-                stream=True,
-                
-            )
-            
-            # 定义生成器函数，逐步 yield 内容
-            # 流式模式下，暂时无法简单计算 TPS 和 Peak Memory，直接返回纯文本流
+            # 流式返回生成器
+            streamer = self.backend.generate(**generate_kwargs)
             def generator():
                 for new_text in streamer:
                     yield new_text
-            
             return generator()
-
-        
         else:
+            # 普通返回结果 + 监控
             with self.monitor.track():
-                response = self.backend.generate(
-                    prompt, 
-                    pixel_values,
-                    num_patches_list=num_patches_list,
-                    stream=False,
-                    
-                )
+                response = self.backend.generate(**generate_kwargs)
+            
             tps = TPSCalculator.calculate(response, self.monitor.latency)
             return {
                 "text": response,
                 "stats": {
-                    **self.monitor.get_report(), # 包含 latency 和 peak_memory
+                    **self.monitor.get_report(),
                     "tps": f"{tps:.2f} tok/s"
                 }
             }
-        
-        
-        
-        
-    
-    
 
+    
     
     
 if __name__ =="__main__":
     # 测试
-    from src.backends.torch_backend.internvl import PyTorchBackend
-    model = PyTorchBackend("/app/models/InternVL3_5-4B-Instruct")
+    from src.backends.torch_backend.internvl import InternPyTorchBackend
+    model = InternPyTorchBackend("/app/models/InternVL3_5-4B-Instruct")
     internvl = InternVLPipeline(backend=model)
     kwargs = {"frames":8}
     # 流式输出
-    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=False,**kwargs)
+    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=True,**kwargs)
     print("Bot: ", end="", flush=True)
     for chunk in answer:
         print(chunk, end="", flush=True)
     print("\n\n>>> 结束")
 
     # 非流式
-    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=True,**kwargs)
+    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=False,**kwargs)
     print(answer)
