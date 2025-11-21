@@ -94,7 +94,7 @@ class InternVLPipeline(BasePipeline):
         pixel_values = torch.cat(pixel_values_list).to(torch.bfloat16).cuda()
         return pixel_values, num_patches_list
     
-    def run(self, prompt, media_path=None, media_type='text', **kwargs):
+    def run(self, prompt, media_path=None, media_type='text',stream=False, **kwargs):
         print("Inference"+"-----"*12)
         
         # 1. 加载媒体
@@ -113,22 +113,44 @@ class InternVLPipeline(BasePipeline):
             prefix = "".join([f"视频帧<{i+1}>: <image>\n" for i in range(len(media_list))])
             prompt = prefix + prompt
         
-        
-        with self.monitor.track():
-            response = self.backend.generate(
+        if stream:
+            # 调用后端获取生成器
+            streamer = self.backend.generate(
                 prompt, 
-                pixel_values,
-                num_patches_list,
+                pixel_values, 
+                num_patches_list=num_patches_list,
+                stream=True,
                 
             )
-        tps = TPSCalculator.calculate(response, self.monitor.latency)
-        return {
-            "text": response,
-            "stats": {
-                **self.monitor.get_report(), # 包含 latency 和 peak_memory
-                "tps": f"{tps:.2f} tok/s"
+            
+            # 定义生成器函数，逐步 yield 内容
+            # 流式模式下，暂时无法简单计算 TPS 和 Peak Memory，直接返回纯文本流
+            def generator():
+                for new_text in streamer:
+                    yield new_text
+            
+            return generator()
+
+        
+        else:
+            with self.monitor.track():
+                response = self.backend.generate(
+                    prompt, 
+                    pixel_values,
+                    num_patches_list=num_patches_list,
+                    stream=False,
+                    
+                )
+            tps = TPSCalculator.calculate(response, self.monitor.latency)
+            return {
+                "text": response,
+                "stats": {
+                    **self.monitor.get_report(), # 包含 latency 和 peak_memory
+                    "tps": f"{tps:.2f} tok/s"
+                }
             }
-        }
+        
+        
         
         
     
@@ -142,5 +164,9 @@ if __name__ =="__main__":
     model = PyTorchBackend("/app/models/InternVL3_5-4B-Instruct")
     internvl = InternVLPipeline(backend=model)
     kwargs = {"frames":8}
-    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",**kwargs)
-    print(answer)
+    answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=True,**kwargs)
+    print("Bot: ", end="", flush=True)
+    for chunk in answer:
+        print(chunk, end="", flush=True)
+    print("\n\n>>> 结束")
+    
