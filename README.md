@@ -169,3 +169,11 @@ analyzer.plot_heatmap(attn_data, save_path="heatmap.png")
         
 
 _Project maintained by xxmyhsxx_
+
+##### FP16 单图片模型生成token推理测试：
+- Pytorch原生推理框架: 2.40tokens/s
+- 使用Pytorch后端的LMdeploy框架: 4.40tokens/s
+- Llama.cpp使用sever服务推理 :4.15tokens/s
+
+
+GGML_CUDA_FORCE_MMQ=1 ./llama-server   -m /app/eslm/ollama_models/InternVL3_5-4B.f16.gguf   --mmproj /app/eslm/ollama_models/InternVL3_5-4B.mmproj-f16.gguf   --host 0.0.0.0   --port 8089   -c 4096   -ngl 999   --n-gpu-layers 999
