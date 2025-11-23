@@ -146,7 +146,7 @@ class InternVLPipeline(BasePipeline):
             return self.run_pytorch(prompt, media_path, media_type, stream, **kwargs)
         elif self.backend_type == "llamacpp":
             return self.run_llama(prompt, media_path, media_type, stream, **kwargs)
-        elif self.backend_type == "llamacpp":
+        elif self.backend_type == "lmdeploy":
             return self.run_deploy(prompt,media_path,media_type,stream,**kwargs)
         else:
             print("暂不支持")
@@ -226,6 +226,37 @@ class InternVLPipeline(BasePipeline):
             }
     
     def run_deploy(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
+        media_list = []
+        if media_path:
+            media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
+
+
+        generate_kwargs = {
+            "prompt": prompt,
+            "media_list": media_list,  # 直接传路径，不传 PIL 对象
+            "stream": stream,
+            "frames": kwargs.get('frames', 8), # 传递给 load_prompts 的 num_segments
+            "max_new_tokens": kwargs.get('max_new_tokens', 1024),
+            "temperature": kwargs.get('temperature', 0.7)
+        }
+
+        if stream:
+            print("\n" + "="*20 + " LMDeploy 流式输出 " + "="*20)
+            return self.backend.generate(**generate_kwargs)
+        else:
+            print("\n" + "="*20 + " LMDeploy 非流式输出 " + "="*20)
+            with self.monitor.track():
+                response = self.backend.generate(**generate_kwargs)
+            
+            # 计算 TPS
+            tps = TPSCalculator.calculate(response, self.monitor.latency)
+            return {
+                "text": response,
+                "stats": {
+                    **self.monitor.get_report(),
+                    "tps": f"{tps:.2f} tok/s"
+                }
+            }
         
 
 

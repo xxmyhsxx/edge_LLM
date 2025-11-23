@@ -46,8 +46,7 @@ def load_video(video_path, bound=None, num_segments=32):
     return imgs
 
 
-def load_prompts(prompt,video_path,num_segments=8):
-    imgs = load_video(video_path, num_segments=num_segments)
+def load_prompts(prompt,imgs,num_segments=8):
     question = ''
     for i in range(len(imgs)):
         question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
@@ -95,6 +94,32 @@ class InternLMDeployBackend(BaseEngine):
         """
         if not hasattr(self, 'pipe'):
             self.load()
+        if media_list:
+            num_segments = kwargs.get('frames', 8)
+            messages = load_prompts(prompt, media_list, num_segments=num_segments)
+        else:
+            messages = [dict(role='user', content=prompt)]
 
-        
-            return 
+        # 2. 配置生成参数
+        gen_config = GenerationConfig(
+            max_new_tokens=kwargs.get('max_new_tokens', 1024),
+            top_p=0.8,
+            temperature=kwargs.get('temperature', 0.0),
+            do_sample=kwargs.get('do_sample', False)
+        )
+
+        # 3. 推理
+        if stream:
+            return self._stream_wrapper(messages, gen_config)
+        else:
+            # pipe 返回的是 Response 列表
+            response = self.pipe(messages, gen_config=gen_config)
+            return response.text
+
+    def _stream_wrapper(self, messages, gen_config):
+        """流式输出包装器"""
+        for output in self.pipe.stream_infer(messages, gen_config=gen_config):
+            if hasattr(output, 'text'):
+                yield output.text 
+            elif hasattr(output, 'content'):
+                yield output.content
