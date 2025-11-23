@@ -1,115 +1,96 @@
-import os
 import base64
-from io import BytesIO
-from ..base import BaseEngine
+import io
+from openai import OpenAI
 
-# 尝试导入，防止未安装报错
-try:
-    from llama_cpp import Llama
-    from llama_cpp.llama_chat_format import Llava15ChatHandler
-except ImportError:
-    Llama = None
+class InternLlamaCppBackend:
+    def __init__(self, base_url="http://localhost:8089/v1", api_key="sk-no-key-required"):
+        """
+        初始化 LlamaCpp 后端
+        :param base_url: llama-server 的地址
+        :param api_key: 占位符 key，server 模式通常忽略
+        """
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
+        # model 属性用于 pipeline 检查是否已加载，随便设一个非 None 值
+        self.model = "remote-model" 
+        self.base_url = base_url
 
-class LlamaCppBackend(BaseEngine):
     def load(self):
-        if Llama is None:
-            raise ImportError("Please install llama-cpp-python with CUDA support first.")
+        """
+        Server 模式下不需要本地加载权重，这里仅做连接测试
+        """
+        print(f">>> [LlamaCppBackend] Connecting to server at {self.base_url}...")
+        try:
+            # 尝试列出模型以测试连接
+            self.client.models.list()
+            print(">>> [LlamaCppBackend] Connection established successfully.")
+        except Exception as e:
+            print(f">>> [LlamaCppBackend] Warning: Connection failed. Ensure llama-server is running. Error: {e}")
 
-        print(f">>> [Backend: LlamaCpp] Loading GGUF model: {self.model_path}...")
-        
-        # 1. 读取配置 (从 configs/jetson_orin.yaml 或默认值)
-        # n_gpu_layers=-1 表示将所有层加载到 GPU (Jetson 上必须这样才快)
-        n_gpu_layers = self.config.get('n_gpu_layers', -1) 
-        n_ctx = self.config.get('max_model_len', 2048)
-        
-        # 2. 多模态支持 (Vision Projector)
-        # 如果是多模态模型，通常需要指定 mmproj (clip) 文件的路径
-        # 假设 config 中有一个 'mmproj_path' 字段
-        chat_handler = None
-        mmproj_path = self.config.get('mmproj_path')
-        
-        if mmproj_path and os.path.exists(mmproj_path):
-            print(f"    Loading MMProj: {mmproj_path}")
-            # 注意：这里使用 Llava15 处理器作为通用多模态处理器
-            # 对于 InternVL GGUF，请确认其兼容性，通常需要专门的 handler 或 clip 模型
-            chat_handler = Llava15ChatHandler(clip_model_path=mmproj_path)
-        
-        # 3. 初始化 Llama
-        self.model = Llama(
-            model_path=self.model_path,
-            chat_handler=chat_handler,
-            n_gpu_layers=n_gpu_layers,
-            n_ctx=n_ctx,
-            verbose=False  # 设为 True 可以看到底层的 CUDA log
-        )
-        print(f">>> [Backend: LlamaCpp] Load finished.")
-        return self
-
-    def _pil_to_base64(self, image):
-        """辅助函数：将 PIL Image 转为 Base64"""
-        buffered = BytesIO()
+    def _image_to_base64(self, image):
+        """将 PIL Image 转换为 Base64 字符串"""
+        buffered = io.BytesIO()
+        # 统一转为 JPEG 以减少体积，保持 RGB 模式
+        if image.mode != "RGB":
+            image = image.convert("RGB")
         image.save(buffered, format="JPEG")
-        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        return f"data:image/jpeg;base64,{img_str}"
+        return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-    def generate(self, prompt, pixel_values=None, num_patches_list=None, media_list=None, stream=False, **kwargs):
+    def generate(self, prompt, media_list=None, stream=False, **kwargs):
         """
-        统一生成接口。
+        生成回复
+        :param prompt: 文本提示词
+        :param media_list: 图片列表 (PIL Image List)
+        :param stream: 是否流式输出
+        """
         
-        Args:
-            prompt (str): 文本提示
-            pixel_values: (被忽略) PyTorch Tensor
-            num_patches_list: (被忽略)
-            media_list (list[PIL.Image]): 原始图片列表 【关键数据】
-            stream (bool): 是否流式
-        """
-        if self.model is None:
-            self.load()
-
-        # 1. 构建消息 (Messages)
+        # 1. 构建消息内容
         content = []
         
-        # 如果有多媒体数据，先处理图片
+        # 处理文本部分
+        if prompt:
+            content.append({"type": "text", "text": prompt})
+
+        # 处理图像/视频帧部分
         if media_list:
-            for img in media_list:
-                # llama-cpp-python 接收 image_url 格式的 base64
-                b64_img = self._pil_to_base64(img)
+            for i, img in enumerate(media_list):
+                b64_str = self._image_to_base64(img)
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": b64_img}
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{b64_str}"
+                    }
                 })
-        
-        # 添加文本
-        # 注意：InternVL 的 Prompt 可能包含 <image> 占位符，这里简单清洗一下
-        # 让 chat_handler 去自动处理图文位置
-        clean_prompt = prompt.replace("<image>", "").replace("Image-1:", "").strip()
-        content.append({"type": "text", "text": clean_prompt})
 
         messages = [
-            {"role": "user", "content": content}
+            {
+                "role": "user",
+                "content": content
+            }
         ]
 
-        # 2. 提取参数
-        max_tokens = kwargs.get('max_new_tokens', 512)
-        temperature = kwargs.get('temperature', 0.7)
+        # 2. 发送请求
+        try:
+            response = self.client.chat.completions.create(
+                model="default-model", # Server 启动时已指定模型，此处名称不重要
+                messages=messages,
+                max_tokens=kwargs.get("max_tokens", 512),
+                temperature=kwargs.get("temperature", 0.0),
+                stream=stream
+            )
 
-        # 3. 调用底层推理
-        response = self.model.create_chat_completion(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            stream=stream
-        )
+            # 3. 处理返回结果
+            if stream:
+                # 返回生成器
+                return self._stream_generator(response)
+            else:
+                # 返回完整字符串
+                return response.choices[0].message.content
 
-        # 4. 处理输出 (流式 vs 普通)
-        if stream:
-            # 返回一个生成器，适配 Pipeline 的 yield 逻辑
-            def generator():
-                for chunk in response:
-                    delta = chunk['choices'][0]['delta']
-                    if 'content' in delta:
-                        yield delta['content']
-            return generator()
-        else:
-            # 直接返回文本
-            return response['choices'][0]['message']['content']
+        except Exception as e:
+            return f"Error during generation: {str(e)}"
+
+    def _stream_generator(self, response_stream):
+        """处理流式响应的辅助生成器"""
+        for chunk in response_stream:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content

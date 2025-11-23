@@ -6,26 +6,32 @@ from src.pipelines.base_pipeline import BasePipeline
 from src.utils.media_loader import MediaLoader
 from src.utils.metrics import PerformanceMonitor, TPSCalculator
 
+# 尝试导入各个后端
 try:
     from src.backends.torch_backend.internvl import InternPyTorchBackend
 except ImportError:
-    PyTorchBackend = None
+    InternPyTorchBackend = None
 
 try:
-    from src.backends.llamacpp_backend.internvl import InternLlamaCppBackend
+    from src.backends.llamacpp_backend.internvl import LlamaCppBackend # 注意类名修正
 except ImportError:
     LlamaCppBackend = None
 
 try:
     from src.backends.vllm_backend.internvl import InternVLLMBackend
 except ImportError:
-    VLLMBackend = None
+    InternVLLMBackend = None
+
+try:
+    from src.backends.lmdeploy_backend.internvl import InternLMDeployBackend
+except ImportError:
+    InternLMDeployBackend = None
 
 class InternVLPipeline(BasePipeline):
     def __init__(self, backend):
         super().__init__(backend)
         # 确保后端已加载
-        if self.backend.model is None:
+        if self.backend.model is None and not hasattr(self.backend, 'pipe'): # 兼容 lmdeploy 的 pipe 属性
             self.backend.load()
             
         self.IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -39,16 +45,17 @@ class InternVLPipeline(BasePipeline):
         """
         辅助函数：确定后端的具体类型
         """
-        # 1. 优先使用 isinstance 检查 (最准确)
+        # 1. 优先使用 isinstance 检查
         if InternPyTorchBackend and isinstance(backend, InternPyTorchBackend):
             return "pytorch"
-        if InternLlamaCppBackend and isinstance(backend, InternLlamaCppBackend):
+        if LlamaCppBackend and isinstance(backend, LlamaCppBackend):
             return "llamacpp"
         if InternVLLMBackend and isinstance(backend, InternVLLMBackend):
             return "vllm"
+        if InternLMDeployBackend and isinstance(backend, InternLMDeployBackend):
+            return "lmdeploy"
             
         # 2. 兜底策略：使用类名字符串检查
-        # (防止某些环境下 import 失败导致 isinstance 失效)
         class_name = backend.__class__.__name__
         if "PyTorch" in class_name: return "pytorch"
         if "LlamaCpp" in class_name: return "llamacpp"
@@ -56,9 +63,6 @@ class InternVLPipeline(BasePipeline):
         if "LMDeploy" in class_name: return "lmdeploy"
         
         return "unknown"
-    
-
-
 
     def _build_transform(self, input_size):
         return T.Compose([
@@ -67,6 +71,7 @@ class InternVLPipeline(BasePipeline):
             T.ToTensor(),
             T.Normalize(mean=self.IMAGENET_MEAN, std=self.IMAGENET_STD)
         ])
+        
     def _find_closest_aspect_ratio(self, aspect_ratio, target_ratios, width, height, image_size):
         """找到最接近目标宽高比的比例。"""
         best_ratio_diff = float('inf')
@@ -117,10 +122,9 @@ class InternVLPipeline(BasePipeline):
             processed_images.append(thumbnail_img)
         return processed_images
 
-
     def preprocess(self, media_list):
         """
-        将 PIL Image 列表转换为 Tensor (pixel_values)
+        将 PIL Image 列表转换为 Tensor (pixel_values) - 仅用于 PyTorch 后端
         """
         input_size = 448
         transform = self._build_transform(input_size)
@@ -137,50 +141,52 @@ class InternVLPipeline(BasePipeline):
         pixel_values = torch.cat(pixel_values_list).to(torch.bfloat16).cuda()
         return pixel_values, num_patches_list
     
-    def run(self, prompt, media_path=None, media_type='text',stream=False, **kwargs):
+    def run(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
+        if self.backend_type == "pytorch":
+            return self.run_pytorch(prompt, media_path, media_type, stream, **kwargs)
+        elif self.backend_type == "llamacpp":
+            return self.run_llama(prompt, media_path, media_type, stream, **kwargs)
+        elif self.backend_type == "llamacpp":
+            return self.run_deploy(prompt,media_path,media_type,stream,**kwargs)
+        else:
+            print("暂不支持")
+            return 0
+    
+    def run_pytorch(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
         print("Inference"+"-----"*12)
-        
-        # 1. 加载媒体
         media_list = []
         if media_path:
             media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
-
         generate_kwargs = {
             "prompt": prompt,
             "stream": stream,
-            
+            # **kwargs # 允许透传 max_new_tokens 等
         }
-
-        if self.backend_type == "pytorch":
-            pixel_values = None
-            num_patches_list = []
+        pixel_values = None
+        num_patches_list = []
             
-            if media_list:
-                pixel_values, num_patches_list = self.preprocess(media_list)
-                # 构造 Prompt 前缀
-                prefix = "".join([f"视频帧<{i+1}>: <image>\n" for i in range(len(media_list))])
+        if media_list:
+            pixel_values, num_patches_list = self.preprocess(media_list)
+            prefix = "".join([f"Frame {i+1}: <image>\n" for i in range(len(media_list))])
+                
+            if len(media_list) == 1:
+                generate_kwargs["prompt"] = f"<image>\n{prompt}"
+            else:
                 generate_kwargs["prompt"] = prefix + prompt
             
-            generate_kwargs["pixel_values"] = pixel_values
-            generate_kwargs["num_patches_list"] = num_patches_list
-        elif self.backend_type == "llamacpp":
-            generate_kwargs["media_list"] = media_list
-        elif self.backend_type == "vllm":
-            pass
-        else:
-            pass
+        generate_kwargs["pixel_values"] = pixel_values
+        generate_kwargs["num_patches_list"] = num_patches_list
         if stream:
             # 流式返回生成器
             streamer = self.backend.generate(**generate_kwargs)
             def generator():
-                for new_text in streamer:
-                    yield new_text
+                last_text = ""
+                for output in streamer:
+                    yield output
             return generator()
         else:
-            # 普通返回结果 + 监控
             with self.monitor.track():
                 response = self.backend.generate(**generate_kwargs)
-            
             tps = TPSCalculator.calculate(response, self.monitor.latency)
             return {
                 "text": response,
@@ -189,6 +195,44 @@ class InternVLPipeline(BasePipeline):
                     "tps": f"{tps:.2f} tok/s"
                 }
             }
+    
+    def run_llama(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
+        
+        media_list = []
+        if media_path:
+            media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
+        
+
+        generate_kwargs = {
+            "prompt": prompt,
+            "stream": stream,
+            # **kwargs # 允许透传 max_new_tokens 等
+        }
+        generate_kwargs["media_list"] = media_list
+        if stream:
+            print("\n" + "="*20 + " 流式输出 " + "="*20)
+            return self.backend.generate(**generate_kwargs)
+        else:
+            print("\n" + "="*20 + " 非流式输出 " + "="*20)
+            with self.monitor.track():
+                response = self.backend.generate(**generate_kwargs)
+            tps = TPSCalculator.calculate(response, self.monitor.latency)
+            return {
+                "text": response,
+                "stats": {
+                    **self.monitor.get_report(),
+                    "tps": f"{tps:.2f} tok/s"
+                }
+            }
+    
+    def run_deploy(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
+        
+
+
+        
+
+
+
 
     
     
@@ -198,7 +242,7 @@ if __name__ =="__main__":
     from src.backends.torch_backend.internvl import InternPyTorchBackend
     model = InternPyTorchBackend("/app/models/InternVL3_5-4B-Instruct")
     internvl = InternVLPipeline(backend=model)
-    kwargs = {"frames":8}
+    kwargs = {"frames":1}
     # 流式输出
     answer = internvl.run("请详细描述视频内容：","/app/eslm/test/Test/Video/001.mp4","video",stream=True,**kwargs)
     print("Bot: ", end="", flush=True)
