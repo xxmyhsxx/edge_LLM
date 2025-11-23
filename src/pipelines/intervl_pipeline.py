@@ -71,6 +71,13 @@ class InternVLPipeline(BasePipeline):
             T.ToTensor(),
             T.Normalize(mean=self.IMAGENET_MEAN, std=self.IMAGENET_STD)
         ])
+    def _transform(self, input_size):
+        return T.Compose([
+            T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
+            T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+            
+        ])
+    
         
     def _find_closest_aspect_ratio(self, aspect_ratio, target_ratios, width, height, image_size):
         """找到最接近目标宽高比的比例。"""
@@ -153,7 +160,6 @@ class InternVLPipeline(BasePipeline):
             return 0
     
     def run_pytorch(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
-        print("Inference"+"-----"*12)
         media_list = []
         if media_path:
             media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
@@ -180,7 +186,6 @@ class InternVLPipeline(BasePipeline):
             # 流式返回生成器
             streamer = self.backend.generate(**generate_kwargs)
             def generator():
-                last_text = ""
                 for output in streamer:
                     yield output
             return generator()
@@ -197,10 +202,11 @@ class InternVLPipeline(BasePipeline):
             }
     
     def run_llama(self, prompt, media_path=None, media_type='text', stream=False, **kwargs):
-        
         media_list = []
         if media_path:
             media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
+        transform = self._transform(448)
+        media_list = [transform(p) for p in media_list]
         
 
         generate_kwargs = {
@@ -230,7 +236,10 @@ class InternVLPipeline(BasePipeline):
         if media_path:
             media_list = MediaLoader.load(media_path, media_type, kwargs.get('frames', 8))
 
-
+        transform = self._transform(448)
+        media_list = [transform(p) for p in media_list]
+        
+        
         generate_kwargs = {
             "prompt": prompt,
             "media_list": media_list,  # 直接传路径，不传 PIL 对象

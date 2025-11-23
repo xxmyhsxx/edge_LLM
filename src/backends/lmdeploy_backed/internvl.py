@@ -66,7 +66,7 @@ class InternLMDeployBackend(BaseEngine):
 
         print(f">>> [Backend: LMDeploy] Loading {self.model_path}...")
 
-        cache_max_entry_count = self.config.get('cache_max_entry_count', 0.15) 
+        cache_max_entry_count = self.config.get('cache_max_entry_count', 0.2) 
         session_len = self.config.get('session_len', 8192) 
         max_prefill_token_num = self.config.get('max_prefill_token_num', 4096)
         
@@ -103,7 +103,7 @@ class InternLMDeployBackend(BaseEngine):
         # 2. 配置生成参数
         gen_config = GenerationConfig(
             max_new_tokens=kwargs.get('max_new_tokens', 1024),
-            top_p=0.8,
+            top_p=0.0,
             temperature=kwargs.get('temperature', 0.0),
             do_sample=kwargs.get('do_sample', False)
         )
