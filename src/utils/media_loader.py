@@ -12,7 +12,7 @@ class MediaLoader:
     """
 
     @staticmethod
-    def load(path: Union[str, List[str]], media_type: str = 'image', num_frames: int = 8) -> List[Image.Image]:
+    def load(path: Union[str, List[str]], media_type: str = 'image', num_frames: int = 2) -> List[Image.Image]:
         """
         通用加载入口。
         
