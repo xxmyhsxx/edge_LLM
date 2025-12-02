@@ -30,7 +30,7 @@ class DecoupledSensitivityProbe:
             modules.extend([layer.mlp.gate_proj, layer.mlp.up_proj, layer.mlp.down_proj])
         return modules
 
-    def run_benchmark(self, media_path, prompt, n_bits=8, output_dir="experiments/results/decoupled_sensitivity"):
+    def run_benchmark(self, media_path, prompt, n_bits=8, output_dir="/app/Edge-LMM-Optimizer/experiments/results/decoupled_sensitivity"):
         os.makedirs(output_dir, exist_ok=True)
         
         # 1. 准备输入 & 获取 Mask (复用 Collector 的精髓)
@@ -117,14 +117,18 @@ class DecoupledSensitivityProbe:
             
             # Text MSE
             mse_txt = diff[:, text_mask, :].mean().item()
+
+            # 计算它们的相对误差
+            rel_mse_vis = mse_vis / (torch.mean(base_final[:, visual_mask, :] ** 2).item() + 1e-9)
+            rel_mse_txt = mse_txt / (torch.mean(base_final[:, text_mask, :] ** 2).item() + 1e-9)
             
             # 恢复权重
             for m, w_orig in zip(targets, backups):
                 m.weight.data = w_orig
             
-            ratio = mse_vis / (mse_txt + 1e-9)
-            scores.append({"layer": i, "mse_vis": mse_vis, "mse_txt": mse_txt, "ratio": ratio})
-            print(f"{i:<4} | {mse_vis*1000:.4f}     | {mse_txt*1000:.4f}     | {ratio:.2f}")
+            ratio = rel_mse_vis / (rel_mse_txt + 1e-9)
+            scores.append({"layer": i, "mse_vis": rel_mse_vis, "mse_txt": rel_mse_txt, "ratio": ratio})
+            print(f"{i:<4} | {rel_mse_vis*1000:.4f}     | {rel_mse_txt*1000:.4f}     | {ratio:.2f}")
 
         self._plot_results(scores, output_dir, n_bits)
 
@@ -151,3 +155,10 @@ class DecoupledSensitivityProbe:
             writer.writeheader()
             writer.writerows(scores)
         print(f">>> [DecoupledSensitivity] Saved to {output_dir}")
+
+
+if __name__ == "__main__":
+    model = "/app/models/InternVL3_5-4B-Instruct"
+    image = "/app/eslm/test/Test/Video/001.mp4"
+    probe = DecoupledSensitivityProbe(model)
+    probe.run_benchmark(image, "Describe this.", n_bits=4)

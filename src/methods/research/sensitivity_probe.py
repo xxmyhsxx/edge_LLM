@@ -43,7 +43,7 @@ class SensitivityProbe:
             ])
         return modules
 
-    def run_benchmark(self, media_path, prompt, n_bits=4, output_dir="experiments/results/sensitivity"):
+    def run_benchmark(self, media_path, prompt, n_bits=4, output_dir="/app/Edge-LMM-Optimizer/experiments/results/sensitivity"):
         os.makedirs(output_dir, exist_ok=True)
         
         # 1. 准备输入 (复用 Collector 的逻辑)
@@ -128,14 +128,16 @@ class SensitivityProbe:
             # D. 计算损失
             q_final = q_out.hidden_states[-1].float()
             mse = torch.nn.functional.mse_loss(baseline_final, q_final).item()
+            # 计算相对误差
+            rel_mse = mse / torch.mean(baseline_final ** 2).item()
             
             # E. 恢复现场：回滚权重 (非常重要！)
             for m, w_orig in zip(targets, backups):
                 m.weight.data = w_orig
             
             # 记录
-            scores.append({"layer": i, "mse": mse})
-            print(f"{i:<6} | {mse*1000:.4f}")
+            scores.append({"layer": i, "mse": rel_mse})
+            print(f"{i:<6} | {rel_mse*1000:.4f}")
 
         # 4. 保存结果
         self._save_and_plot(scores, output_dir, n_bits)
@@ -158,3 +160,13 @@ class SensitivityProbe:
         plt.grid(True, alpha=0.3)
         plt.savefig(os.path.join(output_dir, f"sensitivity_w{n_bits}.png"))
         print(f">>> [Sensitivity] Results saved to {output_dir}")
+
+if __name__ == "__main__":
+    model = "/app/models/InternVL3_5-4B-Instruct"
+    image = "/app/eslm/test/Test/Video/001.mp4"
+    probe = SensitivityProbe(model)
+    probe.run_benchmark(image, "Describe this.", n_bits=4)
+
+
+
+
