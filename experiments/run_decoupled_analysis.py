@@ -113,9 +113,18 @@ if __name__ == "__main__":
 
     analyzer = DistributionAnalyzer(output_dir=args.output,metrics=quant_metrics)
 
-    analyzer.run_analysis(visall,quantvisall,name_a="vis",name_b="quantvis")
-    analyzer.run_analysis(txtall,quanttxtall,name_a="txt",name_b="quanttxt")
-    analyzer.run_analysis(txtuser,quanttxtuser,name_a="txtuser",name_b="quant")
+    # analyzer.run_analysis(visall,quantvisall,name_a="vis",name_b="quantvis")
+    # analyzer.run_analysis(txtall,quanttxtall,name_a="txt",name_b="quanttxt")
+    # analyzer.run_analysis(txtuser,quanttxtuser,name_a="txtuser",name_b="quant")
+
+    results1 = analyzer.run_analysis(visall, quantvisall, name_a="vis", name_b="quantvis")
+    results2 = analyzer.run_analysis(txtall, quanttxtall, name_a="txt", name_b="quanttxt")
+    results3 = analyzer.run_analysis(txtuser, quanttxtuser, name_a="txtuser", name_b="quant")
+
+    analyzer.plot_multi_analysis(
+    [results1, results2, results3],
+    labels=["VIS", "TEXT", "USER"]
+)
 
 
     

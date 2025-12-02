@@ -4,7 +4,7 @@ __pycache__/
 venv/
 .env
 .venv/
-
+experiments/results/
 # VS Code (个人配置不建议上传，除非是团队统一配置)
 .vscode/
 

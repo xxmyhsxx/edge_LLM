@@ -308,4 +308,45 @@ class DistributionAnalyzer:
         print(f">>> [Analyzer] Plot saved: {save_path}")
 
 
+    def plot_multi_analysis(self, results_list, labels, metric_names=None, suffix="multi_compare"):
+        """
+        多组分布结果统一画在一张图上
+        :param results_list: [results1, results2, ...]，每个为 run_analysis 的返回值
+        :param labels: 每组数据的标签
+        :param metric_names: 要对比的指标名（默认全部）
+        :param suffix: 文件名后缀
+        """
+        if not results_list or not labels or len(results_list) != len(labels):
+            print("数据或标签数量不匹配")
+            return
+
+        # 自动获取所有指标名
+        if metric_names is None:
+            metric_names = [m.name for m in self.metrics]
+
+        num_metrics = len(metric_names)
+        layers = [r['layer'] for r in results_list[0]]
+
+        fig, axes = plt.subplots(num_metrics, 1, figsize=(10, 3 * num_metrics), sharex=True)
+        if num_metrics == 1: axes = [axes]
+
+        colors = ['tab:blue', 'tab:red', 'tab:purple', 'tab:green', 'tab:orange', 'tab:cyan']
+
+        for i, metric_name in enumerate(metric_names):
+            ax = axes[i]
+            for j, results in enumerate(results_list):
+                values = [r[metric_name] for r in results]
+                color = colors[j % len(colors)]
+                ax.plot(layers, values, marker='o', color=color, linewidth=2, label=labels[j])
+            ax.set_ylabel(metric_name)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper right')
+        axes[-1].set_xlabel('Layer Index')
+        axes[0].set_title(f'Multi Distribution Analysis')
+        plt.tight_layout()
+        save_path = os.path.join(self.output_dir, f"plot_{suffix}.png")
+        plt.savefig(save_path)
+        print(f">>> [Analyzer] Multi-plot saved: {save_path}")
+
+
 
